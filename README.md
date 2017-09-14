@@ -1,6 +1,62 @@
-# CarND-Controls-MPC
-Self-Driving Car Engineer Nanodegree Program
+[![Udacity - Self-Driving Car NanoDegree](https://s3.amazonaws.com/udacity-sdc/github/shield-carnd.svg)](http://www.udacity.com/drive)
+# Udacity Self-Driving Car Engineer Nanodegree
+# Project: MPC controller
 
+## Project goal and description
+
+This project aims to develop a model predictive controller (MPC) for a car to track a referennce trajectory provided in a simulator. The simulator provides measurement values containing the position of the car, its speed and heading direction as well as the coordinates of waypoints along a reference trajectory that the car is to follow. All coordinates are provided in a global coordinate system. The car's actuators is simulated to have a 100 ms latency (delay) that need to be accounted in the MPC.
+
+To determine an optimal trajectory and its associated actuation commands, I use the IPOPT and CPPAD libraries to minimize error between reference trajectory (yellow line), interpolated with third order polynomial from waypoints and claculated trajectory (green line). The optimization considers only a short duration's worth of waypoints, and produces a trajectory for that duration based upon a model of the vehicle's kinematics and a cost function. A video demo of vehicle with implemented MPC  is shown below:
+
+[![IMAGE ALT TEXT](https://i.ytimg.com/vi/zSFUXdtV1FY/hqdefault.jpg)](https://youtu.be/zSFUXdtV1FY?t=5s)
+
+## Discussion and Reflection
+---
+### The Vehicle Model
+In project is a kinematic bicycle model is used to model the dynamics of the vehicle:
+
+```
+      x_[t+1] = x[t] + v[t] * cos(psi[t]) * dt
+      y_[t+1] = y[t] + v[t] * sin(psi[t]) * dt
+      psi_[t+1] = psi[t] + v[t] / Lf * delta[t] * dt
+      v_[t+1] = v[t] + a[t] * dt
+      cte[t+1] = f(x[t]) - y[t] + v[t] * sin(epsi[t]) * dt
+      epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
+```
+Here, `x,y` are the state of positions of the car in 2D plane, `psi` is the heading direction (orientation), `v` is the velocity, `cte` is the cross-track error and `epsi` is the orientation error. `delta` is commanded steering angle and is bounded in [-25, 25] deg range. `a` is the actuator for throttle and brake with negative values representing braking and positive values denoting acceleration. For simplification, it's slelected in the range of [-1,1]. `Lf` is the distance between the center of mass of vehicle and the front wheels and affects the maneuverability. The vehicle model can be found in the class `FG_eval`. 
+
+### Timestep Length and Elapsed Duration (N & dt)
+The time `T = N * dt` defines the prediction time horizon. Short prediction horizons lead to more responsive controlers, but are less accurate and can suffer from instabilities. Long prediction horizons generally lead to smoother controls but can also suffer from instabilities if not properly tuned. For a given prediction time horizon, shorter time steps `dt` imply more accurate controls but also require a larger MPC problem to be solved, which could increase latency. Various combinations are experimented such as 20/0.05, 14/0.05, 8/0.1,etc.
+
+The final values selected are `N = 10` and `dt = 0.07`.  Since that the `100ms` latency imply that the controls of the first two time steps are not used in the optimization. They are frozen to the values of the previous actuations. From the demo video shown above, the vehicle can navigate throught the track with over 65 mph (with reference velocity of 70 mph).  
+
+### Polynomial Fitting and MPC Preprocessing
+For simplicity, the MPC solving are performed in the vehicle coordinate frame, therefore a preprocessing of the states and waypoints are necessary. First, the coordinates of waypoints in vehicle coordinates are obtained by first shifting the origin of the global frame to the current poistion of the vehicle and followed by rotating the frame such that the x-axis is aligned with with the heading direction. Then, a third order polynomial is fitted to the waypoints. 
+
+The transformation between coordinate systems is implemented in `transformGlobalToLocal`. The quaiton of transformations are
+```
+ X' =   cos(psi) * (ptsx[i] - x) + sin(psi) * (ptsy[i] - y);
+ Y' =  -sin(psi) * (ptsx[i] - x) + cos(psi) * (ptsy[i] - y);  
+```
+where `X',Y'` are coordinates in the vehicle coordinate system. Note that the initial position of the car and heading direction are always zero in this frame. Thus the states of the car in the vehicle cordinate system are
+```
+0, 0, 0, v, cte, epsi;
+```
+
+### Optimal Control Problem
+For every state value provided by the simulator an optimal trajectory for the next N time steps is computed that minimizes a cost function. The cost of a trajectory of length N is computed as follows
+```
+Cost = cte(i)^2 + epsi(i)^2 + (v(i)-v_ref)^2 + delta(i)^2 + 5 a(i)^2 
+       + 2500 [delta(i+1)-delta(i)] ^2 + [a(i+1)-a(i)]^2 in sum over N predictive steps
+```
+After experimentation on different combinations of coefficients, it's found that the weight on steering changes (delta) between adjacent time intervalls is the most important parameter in order to arrive at smooth trajectories. 
+
+Althoguh, the cost function is minimized at all N time steps, only the actuations corresponding to the first time step are sent to the simulator and at the next time step the entire optimal control problem is solved again.
+
+### Model Predictive Control with Latency
+An additional complication of this project consists in taking delayed actuations into account. After the solution of the MPC problem a delay of 100ms is introduced before the actuations are sent back to the simulator. In this problem, latency is taken into account by constraining the controls to the values of the previous iteration for the duration of the latency. Thus the optimal trajectory is computed starting from the time after the latency period. This has the advantage that the dynamics during the latency period is still calculated according to the vehicle model. 
+
+The description below comes from the original repo. 
 ---
 
 ## Dependencies
